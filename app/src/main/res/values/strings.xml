@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">WHOCR</string>
+    <string name="assistant_label">WHOCR screen OCR</string>
+</resources>
