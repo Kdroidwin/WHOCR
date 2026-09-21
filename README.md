@@ -54,13 +54,41 @@ available without a download. Both pipelines support the dedicated vertical
 Japanese mode, which rotates the input internally and maps recognition
 locations back onto the original image.
 
+In `Japanese vertical (manga / novel)` mode, the on-image copy targets and
+translucent blue OCR highlights follow each detected vertical column from top
+to bottom. This does not rotate the source image or alter the copied text.
+
+## Hy-MT FAST translation model
+
+Place `Hy-MT1.5-1.8B-1.25bit.gguf` beside the project directory (for this
+workspace: `WHOCR/Hy-MT1.5-1.8B-1.25bit.gguf`). The Gradle build validates its
+presence and packages it as the uncompressed APK asset
+`assets/Hy-MT1.5-1.8B-1.25bit.gguf`; it is therefore available to an Android
+native GGUF runtime without downloading anything at run time. The model remains
+outside this Git repository and every source ZIP, so its 462 MB weight is not
+accidentally published with source code.
+
+The 1.25-bit model uses STQ1_0 quantization. Its actual inference path requires
+an Android native runtime built with the corresponding llama.cpp STQ kernel.
+WHOCR includes that arm64 native runtime: choose an image, tap the translation
+icon in the lower bar, select the target language (Japanese by default), and
+tap the translation button. The model is expanded once to the app's
+no-backup internal model directory because native GGUF inference needs a local
+file descriptor. No source image, OCR text, or translated result is stored or
+sent. Packaging and inference do not add a network permission.
+
 ## Build
 
 Requires Android SDK Platform 36 and JDK 17:
 
 ```bash
+git submodule update --init --recursive
 ./gradlew test assembleDebug
 ```
+
+The Hy-MT file described above is required for APK packaging; it is deliberately
+excluded from source archives. The `llama.cpp` submodule is pinned to the
+public STQ1_0 implementation needed by that model.
 
 ### GitHub 配布用リリース APK
 

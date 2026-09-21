@@ -46,6 +46,7 @@ class MainActivity : ComponentActivity() {
                     uri?.let(viewModel::openUri)
                 }
                 val shareChooserTitle = remember { "Share image" }
+                val shareTextChooserTitle = remember { "Share recognized text" }
 
                 ScreenshotEditorScreen(
                     state = state,
@@ -63,11 +64,23 @@ class MainActivity : ComponentActivity() {
                             startActivity(Intent.createChooser(shareIntent, shareChooserTitle))
                         }
                     },
+                    onShareRecognizedText = { text ->
+                        startActivity(
+                            Intent(Intent.ACTION_SEND)
+                                .setType("text/plain")
+                                .putExtra(Intent.EXTRA_TEXT, text)
+                                .let { Intent.createChooser(it, shareTextChooserTitle) },
+                        )
+                    },
+                    onResetImage = viewModel::resetImage,
                     onShowMessageConsumed = viewModel::clearMessage,
                     onCopyAll = {},
                     onRerunOcr = viewModel::rerunOcr,
                     onLanguageSelected = viewModel::setLanguage,
                     onOcrProfileSelected = viewModel::setOcrProfile,
+                    onTranslate = viewModel::translateOcrText,
+                    onTranslationProfileSelected = viewModel::setTranslationProfile,
+                    onTranslationTargetSelected = viewModel::setTranslationTarget,
                     onOpenAssistantSettings = {
                         startActivity(Intent(Settings.ACTION_VOICE_INPUT_SETTINGS))
                     },

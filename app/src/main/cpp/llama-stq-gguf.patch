@@ -1,0 +1,15 @@
+diff --git a/ggml/include/ggml.h b/ggml/include/ggml.h
+--- a/ggml/include/ggml.h
++++ b/ggml/include/ggml.h
+@@ -429,6 +429,8 @@ extern "C" {
+         GGML_TYPE_MXFP4   = 39, // MXFP4 (1 block)
+         GGML_TYPE_NVFP4   = 40, // NVFP4 (4 blocks, E4M3 scale)
+         GGML_TYPE_Q1_0    = 41,
+-        GGML_TYPE_Q2_0    = 42,
+-        GGML_TYPE_STQ1_0  = 43,
++        // Hy-MT's released GGUF stores STQ1_0 at wire value 42.
++        // GGUF records enum values, so preserve this compatibility mapping.
++        GGML_TYPE_STQ1_0  = 42,
++        GGML_TYPE_Q2_0    = 43,
+         GGML_TYPE_COUNT   = 44,
+     };

@@ -16,13 +16,19 @@ import com.easyocr.editor.ocr.OcrProfile
 import com.easyocr.editor.ocr.OcrProfilePreferences
 import com.easyocr.editor.ocr.OcrRepository
 import com.easyocr.editor.ocr.WhoCrOcrEngine
+import com.easyocr.editor.translation.TranslationPreferences
+import com.easyocr.editor.translation.TranslationProfile
+import com.easyocr.editor.translation.TranslationRepository
+import com.easyocr.editor.translation.TranslationTarget
 import com.easyocr.editor.ui.CropPreset
 import com.easyocr.editor.ui.CropState
 import com.easyocr.editor.ui.DrawingStroke
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class EditorViewModel(
     application: Application,
@@ -32,9 +38,15 @@ class EditorViewModel(
     private val ocrRepository = OcrRepository(WhoCrOcrEngine(application))
     private val ocrProfilePreferences = OcrProfilePreferences(application)
     private val saveImageUseCase = SaveImageUseCase(application)
+    private val translationPreferences = TranslationPreferences(application)
+    private val translationRepository = TranslationRepository(application)
 
     private val _uiState = MutableStateFlow(
-        EditorUiState(ocrProfile = ocrProfilePreferences.load()),
+        EditorUiState(
+            ocrProfile = ocrProfilePreferences.load(),
+            translationProfile = translationPreferences.loadProfile(),
+            translationTarget = translationPreferences.loadTarget(),
+        ),
     )
     val uiState: StateFlow<EditorUiState> = _uiState
 
@@ -128,6 +140,53 @@ class EditorViewModel(
 
     fun toggleOverlays() {
         _uiState.update { it.copy(overlaysEnabled = !it.overlaysEnabled) }
+    }
+
+    fun setTranslationProfile(profile: TranslationProfile) {
+        translationPreferences.saveProfile(profile)
+        _uiState.update { it.copy(translationProfile = profile) }
+    }
+
+    fun setTranslationTarget(target: TranslationTarget) {
+        translationPreferences.saveTarget(target)
+        _uiState.update { it.copy(translationTarget = target) }
+    }
+
+    fun translateOcrText() {
+        val snapshot = _uiState.value
+        if (snapshot.fullText.isBlank() || snapshot.isTranslating) return
+        viewModelScope.launch {
+            _uiState.update { it.copy(isTranslating = true, translatedText = "", errorMessage = null) }
+            runCatching {
+                // The first use copies the 462 MB model and native inference is CPU-bound.
+                // Keep both off the main thread so the progress state remains drawable.
+                withContext(Dispatchers.Default) {
+                    translationRepository.translate(snapshot.fullText, snapshot.translationProfile, snapshot.translationTarget)
+                }
+            }.onSuccess { translated ->
+                _uiState.update { it.copy(isTranslating = false, translatedText = translated) }
+            }.onFailure { error ->
+                _uiState.update {
+                    it.copy(isTranslating = false, errorMessage = error.message ?: "翻訳に失敗しました")
+                }
+            }
+        }
+    }
+
+    /** Returns to the empty picker without requiring an app restart. */
+    fun resetImage() {
+        ocrRepository.clear()
+        val previous = _uiState.value
+        previous.bitmap
+            ?.takeIf { !it.isRecycled }
+            ?.recycle()
+        _uiState.value = EditorUiState(
+            language = previous.language,
+            ocrProfile = previous.ocrProfile,
+            translationProfile = previous.translationProfile,
+            translationTarget = previous.translationTarget,
+            overlaysEnabled = previous.overlaysEnabled,
+        )
     }
 
     fun rerunOcr() {

@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import android.graphics.Matrix
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
@@ -29,6 +30,7 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -61,6 +63,7 @@ import kotlin.math.roundToInt
 fun ImageCanvasWithOcrOverlay(
     bitmap: Bitmap,
     ocrResult: OcrResult?,
+    isVerticalText: Boolean,
     overlaysEnabled: Boolean,
     transform: ImageTransform,
     viewportSize: SizeF2,
@@ -79,6 +82,7 @@ fun ImageCanvasWithOcrOverlay(
     onDrawStart: (PointF2) -> Unit,
     onDrawMove: (PointF2) -> Unit,
     onDrawEnd: () -> Unit,
+    onVerticalTextSelected: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val imageSize = SizeF2(bitmap.width.toFloat(), bitmap.height.toFloat())
@@ -163,9 +167,28 @@ fun ImageCanvasWithOcrOverlay(
             }
 
             if (overlaysEnabled && activeTool == EditorTool.View) {
-                ocrResult?.blocks.orEmpty().forEach { block ->
+                val overlayBlocks = ocrResult?.blocks.orEmpty()
+                // A rotated vertical OCR pass produces a line for each original
+                // vertical column. Drawing those lines (rather than their larger
+                // parent block) keeps the highlight narrow and upright.
+                val overlayRects = if (isVerticalText) {
+                    overlayBlocks.flatMap { block ->
+                        block.lines.ifEmpty {
+                            listOf(
+                                OcrTextLine(
+                                    id = "${block.id}-overlay",
+                                    text = block.text,
+                                    boundingBox = block.boundingBox,
+                                ),
+                            )
+                        }
+                    }.map { it.boundingBox }
+                } else {
+                    overlayBlocks.map { it.boundingBox }
+                }
+                overlayRects.forEach { imageRect ->
                     val rect = OcrCoordinateMapper.imageToScreenRect(
-                        imageRect = block.boundingBox,
+                        imageRect = imageRect,
                         imageSize = imageSize,
                         viewportSize = viewportSize,
                         transform = transform,
@@ -215,12 +238,75 @@ fun ImageCanvasWithOcrOverlay(
             }
         }
 
-        if (activeTool == EditorTool.View) {
+        if (activeTool == EditorTool.View && !isVerticalText) {
             SelectableOcrTextLayer(
+                ocrResult = ocrResult,
+                isVerticalText = isVerticalText,
+                imageSize = imageSize,
+                viewportSize = viewportSize,
+                transform = transform,
+            )
+        }
+        if (activeTool == EditorTool.View && isVerticalText) {
+            VerticalOcrSelectionLayer(
                 ocrResult = ocrResult,
                 imageSize = imageSize,
                 viewportSize = viewportSize,
                 transform = transform,
+                onTextSelected = onVerticalTextSelected,
+            )
+        }
+    }
+}
+
+/**
+ * Compose's SelectionContainer cannot reliably select a rotated text node.
+ * These targets follow each original vertical column and explicitly select it
+ * on tap or long-press, independent of device/OEM text-toolbar behavior.
+ */
+@Composable
+private fun VerticalOcrSelectionLayer(
+    ocrResult: OcrResult?,
+    imageSize: SizeF2,
+    viewportSize: SizeF2,
+    transform: ImageTransform,
+    onTextSelected: (String) -> Unit,
+) {
+    if (viewportSize.isEmpty) return
+    val density = LocalDensity.current
+    val lines = ocrResult?.blocks.orEmpty().flatMap { block ->
+        block.lines.ifEmpty {
+            listOf(
+                OcrTextLine(
+                    id = "${block.id}-vertical",
+                    text = block.text,
+                    boundingBox = block.boundingBox,
+                ),
+            )
+        }
+    }.filter { it.text.isNotBlank() }
+
+    Box(Modifier.fillMaxSize()) {
+        lines.forEach { line ->
+            val rect = OcrCoordinateMapper.imageToScreenRect(
+                imageRect = line.boundingBox,
+                imageSize = imageSize,
+                viewportSize = viewportSize,
+                transform = transform,
+            )
+            if (rect.width <= 2f || rect.height <= 2f) return@forEach
+            val width = with(density) { rect.width.toDp() }
+            val height = with(density) { rect.height.toDp() }
+            Box(
+                modifier = Modifier
+                    .absoluteOffset {
+                        IntOffset(rect.left.roundToInt(), rect.top.roundToInt())
+                    }
+                    .size(width, height)
+                    .combinedClickable(
+                        onClick = { onTextSelected(line.text) },
+                        onLongClick = { onTextSelected(line.text) },
+                    ),
             )
         }
     }
@@ -279,6 +365,7 @@ private fun ImageTransform.clamped(
 @Composable
 private fun SelectableOcrTextLayer(
     ocrResult: OcrResult?,
+    isVerticalText: Boolean,
     imageSize: SizeF2,
     viewportSize: SizeF2,
     transform: ImageTransform,
@@ -311,7 +398,12 @@ private fun SelectableOcrTextLayer(
                 )
                 if (rect.width <= 2f || rect.height <= 2f) return@forEach
 
-                val widthDp = with(density) { rect.width.toDp() }
+                // The selectable glyph layout needs to be upright in its own
+                // coordinate system. For a vertical Japanese column we lay it
+                // out horizontally in a swapped box, then rotate it clockwise.
+                val layoutWidthPx = if (isVerticalText) rect.height else rect.width
+                val layoutHeightPx = if (isVerticalText) rect.width else rect.height
+                val widthDp = with(density) { layoutWidthPx.toDp() }
                 val baseFontSize = 24.sp
                 val measuredWidth = textMeasurer.measure(
                     text = line.text,
@@ -326,14 +418,39 @@ private fun SelectableOcrTextLayer(
                 ).size.width.coerceAtLeast(1)
                 val fontSizePx = with(density) {
                     val baseFontSizePx = baseFontSize.toPx()
-                    val widthBasedSize = baseFontSizePx * (rect.width * 1.04f) / measuredWidth
-                    widthBasedSize.coerceIn(6f, rect.height * 1.45f)
+                    val widthBasedSize = baseFontSizePx * (layoutWidthPx * 1.04f) / measuredWidth
+                    widthBasedSize.coerceIn(6f, layoutHeightPx * 1.45f)
                 }
-                val heightPx = max(rect.height, fontSizePx * 1.28f)
+                val heightPx = max(layoutHeightPx, fontSizePx * 1.28f)
                 val heightDp = with(density) { heightPx.toDp() }
                 val fontSize = with(density) {
                     fontSizePx.toSp()
                 }
+
+                val textModifier = Modifier
+                    .absoluteOffset {
+                        if (isVerticalText) {
+                            // 90° clockwise around the local top-left moves
+                            // the horizontal baseline down the source column.
+                            IntOffset(rect.right.roundToInt(), rect.top.roundToInt())
+                        } else {
+                            IntOffset(
+                                rect.left.roundToInt(),
+                                (rect.top - (heightPx - rect.height) / 2f).roundToInt(),
+                            )
+                        }
+                    }
+                    .size(width = widthDp, height = heightDp)
+                    .then(
+                        if (isVerticalText) {
+                            Modifier.graphicsLayer {
+                                rotationZ = 90f
+                                transformOrigin = TransformOrigin(0f, 0f)
+                            }
+                        } else {
+                            Modifier
+                        },
+                    )
 
                 Text(
                     text = line.text,
@@ -342,14 +459,7 @@ private fun SelectableOcrTextLayer(
                     lineHeight = fontSize,
                     maxLines = 1,
                     softWrap = false,
-                    modifier = Modifier
-                        .absoluteOffset {
-                            IntOffset(
-                                rect.left.roundToInt(),
-                                (rect.top - (heightPx - rect.height) / 2f).roundToInt(),
-                            )
-                        }
-                        .size(width = widthDp, height = heightDp),
+                    modifier = textModifier,
                 )
             }
         }
@@ -655,13 +765,15 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawRoundedOverlay(
     val size = Size(rect.width, rect.height)
     val radius = CornerRadius(8f, 8f)
     drawRoundRect(
-        color = Color(0x3332C7B7),
+        // Lens-like translucent blue: it remains visible on black manga panels
+        // without obscuring the original glyphs.
+        color = Color(0x443486FF),
         topLeft = topLeft,
         size = size,
         cornerRadius = radius,
     )
     drawRoundRect(
-        color = Color(0xCC14B8A6),
+        color = Color(0xCC75A7FF),
         topLeft = topLeft,
         size = size,
         cornerRadius = radius,

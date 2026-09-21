@@ -38,6 +38,7 @@ import androidx.compose.material.icons.outlined.RotateRight
 import androidx.compose.material.icons.outlined.SaveAlt
 import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material.icons.outlined.Subject
+import androidx.compose.material.icons.outlined.Translate
 import androidx.compose.material.icons.outlined.CropFree
 import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material.icons.outlined.VisibilityOff
@@ -78,6 +79,8 @@ import com.easyocr.editor.geometry.SizeF2
 import com.easyocr.editor.ocr.OcrLanguage
 import com.easyocr.editor.ocr.OcrProfile
 import com.easyocr.editor.privacy.PrivacyScreen
+import com.easyocr.editor.translation.TranslationProfile
+import com.easyocr.editor.translation.TranslationTarget
 import kotlinx.coroutines.launch
 import kotlin.math.min
 
@@ -95,11 +98,16 @@ fun ScreenshotEditorScreen(
     onApplyDrawing: (List<DrawingStroke>) -> Unit,
     onSaveCopy: () -> Unit,
     onShare: () -> Unit,
+    onShareRecognizedText: (String) -> Unit,
+    onResetImage: () -> Unit,
     onShowMessageConsumed: () -> Unit,
     onCopyAll: () -> Unit,
     onRerunOcr: () -> Unit,
     onLanguageSelected: (OcrLanguage) -> Unit,
     onOcrProfileSelected: (OcrProfile) -> Unit,
+    onTranslate: () -> Unit,
+    onTranslationProfileSelected: (TranslationProfile) -> Unit,
+    onTranslationTargetSelected: (TranslationTarget) -> Unit,
     onOpenAssistantSettings: () -> Unit,
 ) {
     val snackbarHostState = remember { SnackbarHostState() }
@@ -110,7 +118,9 @@ fun ScreenshotEditorScreen(
     val drawingStrokes = remember { mutableStateListOf<DrawingStroke>() }
     val undoneDrawingStrokes = remember { mutableStateListOf<DrawingStroke>() }
     var showOcrSheet by remember { mutableStateOf(false) }
+    var showSettingsSheet by remember { mutableStateOf(false) }
     var showPrivacySheet by remember { mutableStateOf(false) }
+    var showTranslationSheet by remember { mutableStateOf(false) }
     var transform by remember { mutableStateOf(ImageTransform()) }
     var viewportSize by remember { mutableStateOf(SizeF2(0f, 0f)) }
     var activeTool by remember { mutableStateOf(EditorTool.View) }
@@ -118,6 +128,7 @@ fun ScreenshotEditorScreen(
     var cropPreview by remember { mutableStateOf(false) }
     var penSettings by remember { mutableStateOf(PenSettings()) }
     var currentStroke by remember { mutableStateOf<DrawingStroke?>(null) }
+    var selectedVerticalText by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(state.bitmap) {
         previewScale.snapTo(0.96f)
@@ -125,6 +136,11 @@ fun ScreenshotEditorScreen(
         drawingStrokes.clear()
         undoneDrawingStrokes.clear()
         currentStroke = null
+        selectedVerticalText = null
+    }
+
+    LaunchedEffect(state.language) {
+        selectedVerticalText = null
     }
 
     LaunchedEffect(state.errorMessage, state.lastSavedUri) {
@@ -184,7 +200,16 @@ fun ScreenshotEditorScreen(
         containerColor = WorkbenchBackground,
         topBar = {
             TopAppBar(
-                title = { Text("WHOCR", color = Color.White) },
+                title = {
+                    Column {
+                        Text("WHOCR", color = Color.White)
+                        Text(
+                            state.ocrProfile.label,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = MaterialTheme.typography.labelSmall,
+                        )
+                    }
+                },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = WorkbenchBackground,
                     scrolledContainerColor = WorkbenchBackground,
@@ -192,6 +217,9 @@ fun ScreenshotEditorScreen(
                     titleContentColor = Color.White,
                 ),
                 actions = {
+                    IconButton(onClick = onResetImage, enabled = state.hasImage) {
+                        Icon(Icons.Outlined.Close, contentDescription = "Reset image")
+                    }
                     IconButton(onClick = onToggleOverlays, enabled = state.hasImage) {
                         Icon(
                             imageVector = if (state.overlaysEnabled) Icons.Outlined.Visibility else Icons.Outlined.VisibilityOff,
@@ -201,8 +229,8 @@ fun ScreenshotEditorScreen(
                     IconButton(onClick = { showPrivacySheet = true }) {
                         Icon(Icons.Outlined.Info, contentDescription = "Privacy")
                     }
-                    IconButton(onClick = onOpenAssistantSettings) {
-                        Icon(Icons.Outlined.Settings, contentDescription = "Assistant settings")
+                    IconButton(onClick = { showSettingsSheet = true }) {
+                        Icon(Icons.Outlined.Settings, contentDescription = "Settings")
                     }
                 },
             )
@@ -226,6 +254,7 @@ fun ScreenshotEditorScreen(
                 bitmap != null -> ImageCanvasWithOcrOverlay(
                     bitmap = bitmap,
                     ocrResult = state.ocrResult,
+                    isVerticalText = state.language == OcrLanguage.JapaneseVertical,
                     overlaysEnabled = state.overlaysEnabled,
                     transform = transform,
                     viewportSize = viewportSize,
@@ -260,6 +289,7 @@ fun ScreenshotEditorScreen(
                         }
                         currentStroke = null
                     },
+                    onVerticalTextSelected = { text -> selectedVerticalText = text },
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(bottom = imageBottomPadding),
@@ -291,6 +321,7 @@ fun ScreenshotEditorScreen(
                 onSaveCopy = onSaveCopy,
                 onShare = onShare,
                 onOcrText = { showOcrSheet = true },
+                onTranslate = { showTranslationSheet = true },
                 onCropPreset = { preset ->
                     val current = state.bitmap ?: return@EditorFloatingControls
                     cropState = cropRectForPreset(
@@ -338,6 +369,25 @@ fun ScreenshotEditorScreen(
                 modifier = Modifier.align(Alignment.BottomCenter),
             )
 
+            // Compose's transparent selectable text does not consistently expose
+            // Android's native selection toolbar on all OEM builds. Keep copy and
+            // text sharing explicit for vertical Japanese columns.
+            if (
+                state.language == OcrLanguage.JapaneseVertical &&
+                (selectedVerticalText ?: state.fullText).isNotBlank() &&
+                activeTool == EditorTool.View
+            ) {
+                val text = selectedVerticalText ?: state.fullText
+                VerticalTextActions(
+                    hasExplicitSelection = selectedVerticalText != null,
+                    onCopy = { copyText(text) },
+                    onShare = { onShareRecognizedText(text) },
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(bottom = 106.dp),
+                )
+            }
+
             AnimatedVisibility(
                 visible = state.isRunningOcr,
                 modifier = Modifier
@@ -380,6 +430,64 @@ fun ScreenshotEditorScreen(
     if (showPrivacySheet) {
         PrivacyScreen(onDismiss = { showPrivacySheet = false })
     }
+
+    if (showTranslationSheet) {
+        TranslationBottomSheet(
+            sourceText = state.fullText,
+            translatedText = state.translatedText,
+            isTranslating = state.isTranslating,
+            profile = state.translationProfile,
+            target = state.translationTarget,
+            onTranslate = onTranslate,
+            onProfileSelected = onTranslationProfileSelected,
+            onTargetSelected = onTranslationTargetSelected,
+            onCopyTranslation = { copyText(state.translatedText) },
+            onDismiss = { showTranslationSheet = false },
+        )
+    }
+
+    if (showSettingsSheet) {
+        OcrSettingsBottomSheet(
+            profile = state.ocrProfile,
+            translationProfile = state.translationProfile,
+            translationTarget = state.translationTarget,
+            onProfileSelected = onOcrProfileSelected,
+            onTranslationProfileSelected = onTranslationProfileSelected,
+            onTranslationTargetSelected = onTranslationTargetSelected,
+            onOpenAssistantSettings = onOpenAssistantSettings,
+            onDismiss = { showSettingsSheet = false },
+        )
+    }
+}
+
+@Composable
+private fun VerticalTextActions(
+    hasExplicitSelection: Boolean,
+    onCopy: () -> Unit,
+    onShare: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        modifier = modifier,
+        shape = MaterialTheme.shapes.large,
+        color = Color(0xEE101010),
+        tonalElevation = 6.dp,
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+            horizontalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            if (hasExplicitSelection) {
+                Text(
+                    "選択中",
+                    modifier = Modifier.padding(start = 10.dp, top = 12.dp),
+                    style = MaterialTheme.typography.labelMedium,
+                )
+            }
+            TextButton(onClick = onCopy) { Text("コピー") }
+            TextButton(onClick = onShare) { Text("共有") }
+        }
+    }
 }
 
 @Composable
@@ -420,6 +528,7 @@ private fun EditorFloatingControls(
     onSaveCopy: () -> Unit,
     onShare: () -> Unit,
     onOcrText: () -> Unit,
+    onTranslate: () -> Unit,
     onCropPreset: (CropPreset) -> Unit,
     onApplyCrop: () -> Unit,
     onCancelCrop: () -> Unit,
@@ -481,6 +590,7 @@ private fun EditorFloatingControls(
             Row(
                 modifier = Modifier
                     .widthIn(max = 344.dp)
+                    .horizontalScroll(rememberScrollState())
                     .padding(horizontal = 7.dp, vertical = 6.dp),
                 horizontalArrangement = Arrangement.spacedBy(2.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -490,6 +600,9 @@ private fun EditorFloatingControls(
                 }
                 FloatingToolButton(selected = activeTool == EditorTool.Draw, enabled = enabled, onClick = onDraw) {
                     Icon(Icons.Outlined.Edit, contentDescription = "Draw")
+                }
+                CompactIconButton(onClick = onTranslate, enabled = enabled) {
+                    Icon(Icons.Outlined.Translate, contentDescription = "Translate OCR text")
                 }
                 CompactIconButton(onClick = onRotateLeft, enabled = enabled) {
                     Icon(Icons.Outlined.RotateLeft, contentDescription = "Rotate left")
