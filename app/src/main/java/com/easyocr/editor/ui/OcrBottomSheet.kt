@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
@@ -52,25 +53,9 @@ fun OcrBottomSheet(
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
             Text("Detected text")
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                Button(onClick = onCopyAll, enabled = fullText.isNotBlank()) {
-                    Icon(Icons.Outlined.ContentCopy, contentDescription = null)
-                    Text("Copy all")
-                }
-                TextButton(onClick = onRerunOcr) {
-                    Icon(Icons.Outlined.Refresh, contentDescription = null)
-                    Text("Re-run OCR")
-                }
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OcrLanguage.entries.forEach { option ->
-                    AssistChip(
-                        onClick = { onLanguageSelected(option) },
-                        label = { Text(option.label) },
-                        enabled = option != language,
-                    )
-                }
-            }
+            // Keep the model choice above a potentially very long recognition
+            // result. On tall/narrow devices the old placement could put it
+            // below the visible bottom-sheet area.
             Text("OCRモデル")
             OcrProfile.entries.forEach { profile ->
                 FilterChip(
@@ -87,6 +72,28 @@ fun OcrBottomSheet(
                     },
                     modifier = Modifier.fillMaxWidth(),
                 )
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Button(onClick = onCopyAll, enabled = fullText.isNotBlank()) {
+                    Icon(Icons.Outlined.ContentCopy, contentDescription = null)
+                    Text("Copy all")
+                }
+                TextButton(onClick = onRerunOcr) {
+                    Icon(Icons.Outlined.Refresh, contentDescription = null)
+                    Text("Re-run OCR")
+                }
+            }
+            Row(
+                modifier = Modifier.horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                OcrLanguage.entries.forEach { option ->
+                    AssistChip(
+                        onClick = { onLanguageSelected(option) },
+                        label = { Text(option.label) },
+                        enabled = option != language,
+                    )
+                }
             }
             SelectionContainer {
                 Text(
